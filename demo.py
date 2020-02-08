@@ -1,47 +1,37 @@
-import os
-import os.path as osp
-import cv2
 import logging
 import argparse
-import motmetrics as mm
-
-from tracker.multitracker import JDETracker
-from utils import visualization as vis
 from utils.utils import *
-from utils.io import read_results
 from utils.log import logger
 from utils.timer import Timer
-from utils.evaluation import Evaluator
 from utils.parse_config import parse_model_cfg
 import utils.datasets as datasets
-import torch
 from track import eval_seq
 
 
 def track(opt):
     logger.setLevel(logging.INFO)
-    result_root = opt.output_root if opt.output_root!='' else '.'
+    result_root = opt.output_root if opt.output_root!='' else '.' # 如果不为空就新建那个文件夹,如果为空就在当前路径
     mkdir_if_missing(result_root)
 
     cfg_dict = parse_model_cfg(opt.cfg)
-    opt.img_size = [int(cfg_dict[0]['width']), int(cfg_dict[0]['height'])]
+    # cfg_dict是一个list，元素为字典，字典元素事模型参数
+    # eg{'type': 'convolutional', 'batch_normalize': '1', 'filters': '32', 'size': '3', 'stride': '1', 'pad': '1', 'activation': 'leaky'}
 
-    # run tracking
-    timer = Timer()
-    accs = []
-    n_frame = 0
+    opt.img_size = [int(cfg_dict[0]['width']), int(cfg_dict[0]['height'])]
 
     logger.info('start tracking...')
     dataloader = datasets.LoadVideo(opt.input_video, opt.img_size)
-    result_filename = os.path.join(result_root, 'results.txt')
+    result_filename = os.path.join(result_root, 'results.txt')  # 存放的检测结果,和gt.txt大致一样
     frame_rate = dataloader.frame_rate 
 
     frame_dir = None if opt.output_format=='text' else osp.join(result_root, 'frame')
+
     try:
         eval_seq(opt, dataloader, 'mot', result_filename,
                  save_dir=frame_dir, show_image=False, frame_rate=frame_rate)
     except Exception as e:
         logger.info(e)
+
 
     if opt.output_format == 'video':
         output_video_path = osp.join(result_root, 'result.mp4')
@@ -50,14 +40,14 @@ def track(opt):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='demo.py')
-    parser.add_argument('--cfg', type=str, default='cfg/yolov3.cfg', help='cfg file path')
-    parser.add_argument('--weights', type=str, default='weights/latest.pt', help='path to weights file')
+    parser.add_argument('--cfg', type=str, default='cfg/yolov3_576x320.cfg', help='cfg file path')
+    parser.add_argument('--weights', type=str, default='weights/jde_576x320_uncertainty.pt', help='path to weights file')
     parser.add_argument('--iou-thres', type=float, default=0.5, help='iou threshold required to qualify as detected')
     parser.add_argument('--conf-thres', type=float, default=0.5, help='object confidence threshold')
     parser.add_argument('--nms-thres', type=float, default=0.4, help='iou threshold for non-maximum suppression')
     parser.add_argument('--min-box-area', type=float, default=200, help='filter out tiny boxes')
     parser.add_argument('--track-buffer', type=int, default=30, help='tracking buffer')
-    parser.add_argument('--input-video', type=str, help='path to the input video')
+    parser.add_argument('--input-video', type=str, default= 'input.mp4',help='path to the input video')
     parser.add_argument('--output-format', type=str, default='video', help='expected output format, can be video, or text')
     parser.add_argument('--output-root', type=str, default='results', help='expected output root path')
     opt = parser.parse_args()

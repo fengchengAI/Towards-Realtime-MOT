@@ -1,11 +1,6 @@
-import os
-import os.path as osp
-import cv2
 import logging
 import argparse
 import motmetrics as mm
-
-import torch
 from tracker.multitracker import JDETracker
 from utils import visualization as vis
 from utils.log import logger
@@ -46,13 +41,16 @@ def eval_seq(opt, dataloader, data_type, result_filename, save_dir=None, show_im
     results = []
     frame_id = 0
     for path, img, img0 in dataloader:
+        # img0是等比例缩小的，img将img0的图像填充和归一化到固定尺寸（cfg.ccmcpe.json中的w和h）。
         if frame_id % 20 == 0:
             logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1./max(1e-5, timer.average_time)))
 
         # run tracking
         timer.tic()
-        blob = torch.from_numpy(img).cuda().unsqueeze(0)
+
+        blob = torch.from_numpy(img).unsqueeze(0)
         online_targets = tracker.update(blob, img0)
+
         online_tlwhs = []
         online_ids = []
         for t in online_targets:

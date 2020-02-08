@@ -1,14 +1,4 @@
-import numpy as np
-from numba import jit
 from collections import deque
-import itertools
-import os
-import os.path as osp
-import time
-import torch
-import torch.nn.functional as F
-
-from utils.utils import *
 from utils.log import logger
 from utils.kalman_filter import KalmanFilter
 from models import *
@@ -31,7 +21,7 @@ class STrack(BaseTrack):
         self.tracklet_len = 0
 
         self.smooth_feat = None
-        self.update_features(temp_feat)
+        self.update_features(temp_feat)  # temp_feat 为 embedding 信息
         self.features = deque([], maxlen=buffer_size)
         self.alpha = 0.9
     
@@ -73,7 +63,7 @@ class STrack(BaseTrack):
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        #self.is_activated = True
+        # self.is_activated = True
         self.frame_id = frame_id
         self.start_frame = frame_id
 
@@ -112,7 +102,6 @@ class STrack(BaseTrack):
             self.update_features(new_track.curr_feat)
 
     @property
-    #@jit(nopython=True)
     def tlwh(self):
         """Get current position in bounding box format `(top left x, top left y,
                 width, height)`.
@@ -125,7 +114,6 @@ class STrack(BaseTrack):
         return ret
 
     @property
-    #@jit(nopython=True)
     def tlbr(self):
         """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,
         `(top left, bottom right)`.
@@ -135,7 +123,6 @@ class STrack(BaseTrack):
         return ret
 
     @staticmethod
-    #@jit(nopython=True)
     def tlwh_to_xyah(tlwh):
         """Convert bounding box to format `(center x, center y, aspect ratio,
         height)`, where the aspect ratio is `width / height`.
@@ -149,14 +136,12 @@ class STrack(BaseTrack):
         return self.tlwh_to_xyah(self.tlwh)
 
     @staticmethod
-    #@jit(nopython=True)
     def tlbr_to_tlwh(tlbr):
         ret = np.asarray(tlbr).copy()
         ret[2:] -= ret[:2]
         return ret
 
     @staticmethod
-    #@jit(nopython=True)
     def tlwh_to_tlbr(tlwh):
         ret = np.asarray(tlwh).copy()
         ret[2:] += ret[:2]
@@ -173,7 +158,7 @@ class JDETracker(object):
         self.model = Darknet(opt.cfg)
         # load_darknet_weights(self.model, opt.weights)
         self.model.load_state_dict(torch.load(opt.weights, map_location='cpu')['model'], strict=False)
-        self.model.cuda().eval()
+        self.model.eval()
 
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
@@ -187,23 +172,34 @@ class JDETracker(object):
         self.kalman_filter = KalmanFilter()
 
     def update(self, im_blob, img0):
+        """
+        :param im_blob: 经过处理的照片
+        :param img0: 仅仅经过缩放的图片
+        :return:
+        """
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
         lost_stracks = []
         removed_stracks = []
 
-        t1 = time.time()
+        # t1 = time.time()
         ''' Step 1: Network forward, get detections & embeddings'''
         with torch.no_grad():
             pred = self.model(im_blob)
         pred = pred[pred[:, :, 4] > self.opt.conf_thres]
+        # pred是由[p_box, p_conf, p_cls, p_emb], dim=-1)cat在一起的，所以第四纬度为conf
         if len(pred) > 0:
             dets = non_max_suppression(pred.unsqueeze(0), self.opt.conf_thres, 
                                        self.opt.nms_thres)[0]
+            '''non_max_suppression作用
+            pred == torch.Size([24, 518])
+            dets == torch.Size([2, 518])
+            '''
             scale_coords(self.opt.img_size, dets[:, :4], img0.shape).round()
             dets, embs = dets[:, :5].cpu().numpy(), dets[:, 6:].cpu().numpy()
             '''Detections'''
+
             detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30) for
                           (tlbrs, f) in zip(dets, embs)]
         else:

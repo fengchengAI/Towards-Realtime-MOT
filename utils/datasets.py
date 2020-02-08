@@ -12,6 +12,15 @@ import torch
 
 from torch.utils.data import Dataset
 from utils.utils import xyxy2xywh
+'''
+这这个项目中
+每个图片都有一个标注信息txt文本，这个标注信息是生成的，
+文本中每行都是以下格式
+[class] [identity] [x_center] [y_center] [width] [height]
+[class]在本项目中并没有使用，因为我们只关心的是行人，所以只是一类
+[identity]是[0, num_identities - 1],是行人ID,如果是-1则表示没有行人
+[x_center][y_center][width][height]  from 0 to 1.
+'''
 
 class LoadImages:  # for inference
     def __init__(self, path, img_size=(1088, 608)):
@@ -76,7 +85,7 @@ class LoadImages:  # for inference
         return self.nF  # number of files
 
 
-class LoadVideo:  # for inference
+class LoadVideo:  # for demo
     def __init__(self, path, img_size=(1088, 608)):
         self.cap = cv2.VideoCapture(path)        
         self.frame_rate = int(round(self.cap.get(cv2.CAP_PROP_FPS)))
@@ -107,31 +116,37 @@ class LoadVideo:  # for inference
         # Read image
         res, img0 = self.cap.read()  # BGR
         assert img0 is not None, 'Failed to load frame {:d}'.format(self.count)
-        img0 = cv2.resize(img0, (self.w, self.h))
+        #img0 = cv2.resize(img0, (self.w, self.h))
+        img0 = cv2.resize(img0, (self.h, self.w))  # 注意opencv的默认w和h的顺序
+
 
         # Padded resize
         img, _, _, _ = letterbox(img0, height=self.height, width=self.width)
+        #print(img.shape())
 
         # Normalize RGB
-        img = img[:, :, ::-1].transpose(2, 0, 1)
+        img = img[:, :, ::-1].transpose(2, 0, 1)  # img[:, :, ::-1] 为rgb顺序， transpose(2, 0, 1)后通道数为第一个维度
         img = np.ascontiguousarray(img, dtype=np.float32)
         img /= 255.0
 
         # cv2.imwrite(img_path + '.letterbox.jpg', 255 * img.transpose((1, 2, 0))[:, :, ::-1])  # save letterbox image
-        return self.count, img, img0
+        return self.count, img, img0  # img 为处理过的图像,img0是resize的原始图片
     
     def __len__(self):
         return self.vn  # number of files
 
 
-class LoadImagesAndLabels:  # for training
+class LoadImagesAndLabels:  # for training适合读取一个数据集，如果仅为理解算法，可以阅读这个，主要看__getitem__的返回值
+    '''
+    return : img, labels, img_path, (h, w)
+    '''
     def __init__(self, path, img_size=(1088,608),  augment=False, transforms=None):
         with open(path, 'r') as file:
             self.img_files = file.readlines()
             self.img_files = [x.replace('\n', '') for x in self.img_files]
             self.img_files = list(filter(lambda x: len(x) > 0, self.img_files))
 
-        self.label_files = [x.replace('images', 'labels_with_ids').replace('.png', '.txt').replace('.jpg', '.txt')
+        self.label_files = [x.replace('img1', 'labels_with_ids').replace('.png', '.txt').replace('.jpg', '.txt')
                             for x in self.img_files]
 
         self.nF = len(self.img_files)  # number of image files
@@ -147,6 +162,7 @@ class LoadImagesAndLabels:  # for training
         return self.get_data(img_path, label_path)
 
     def get_data(self, img_path, label_path):
+
         height = self.height
         width = self.width
         img = cv2.imread(img_path)  # BGR
@@ -174,8 +190,8 @@ class LoadImagesAndLabels:  # for training
             img_hsv[:, :, 2] = V.astype(np.uint8)
             cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)
 
-        h, w, _ = img.shape
-        img, ratio, padw, padh = letterbox(img, height=height, width=width)
+        h, w, _ = img.shape  # 原始图像大小
+        img, ratio, padw, padh = letterbox(img, height=height, width=width)  # 缩放然后填充
 
         # Load labels
         if os.path.isfile(label_path):
@@ -183,6 +199,7 @@ class LoadImagesAndLabels:  # for training
 
             # Normalized xywh to pixel xyxy format
             labels = labels0.copy()
+            # 将cx,cy,w,h变换为minx，miny，maxx，maxy
             labels[:, 2] = ratio * w * (labels0[:, 2] - labels0[:, 4] / 2) + padw
             labels[:, 3] = ratio * h * (labels0[:, 3] - labels0[:, 5] / 2) + padh
             labels[:, 4] = ratio * w * (labels0[:, 2] + labels0[:, 4] / 2) + padw
@@ -216,7 +233,7 @@ class LoadImagesAndLabels:  # for training
             labels[:, 4] /= width
             labels[:, 5] /= height
         if self.augment:
-            # random left-right flip
+            # random left-right flip 随机左右颠覆
             lr_flip = True
             if lr_flip & (random.random() > 0.5):
                 img = np.fliplr(img)
@@ -233,8 +250,10 @@ class LoadImagesAndLabels:  # for training
         return self.nF  # number of batches
 
 
-def letterbox(img, height=608, width=1088, color=(127.5, 127.5, 127.5)):  # resize a rectangular image to a padded rectangular 
-    shape = img.shape[:2]  # shape = [height, width]
+def letterbox(img, height=608, width=1088, color=(127.5, 127.5, 127.5)):
+    # resize a rectangular image to a padded rectangular
+    # 对原始图片进行缩放(长宽等比例),然后再给图片加边界,以使得图片大小填充到固定大小,如参数中的height和width
+    shape = img.shape[:2]  # shape = [height, width] [0:2]d的切片实际上是两个值,不包括2的索引
     ratio = min(float(height)/shape[0], float(width)/shape[1])
     new_shape = (round(shape[1] * ratio), round(shape[0] * ratio)) # new_shape = [width, height]
     dw = (width - new_shape[0]) / 2  # width padding
@@ -338,9 +357,20 @@ def collate_fn(batch):
     return imgs, filled_labels, paths, sizes, labels_len.unsqueeze(1)
 
 
-class JointDataset(LoadImagesAndLabels):  # for training
+class JointDataset(LoadImagesAndLabels):  # for training适合读取多个数据集
     def __init__(self, root, paths, img_size=(1088,608), augment=False, transforms=None):
-        
+        '''
+        "root":"/home/wangzd/datasets/MOT",
+        "paths":
+        {
+            "mot17":"./data/mot17.train",
+            "caltech":"./data/caltech.train",
+            "citypersons":"./data/citypersons.train",
+            "cuhksysu":"./data/cuhksysu.train",
+            "prw":"./data/prw.train",
+            "eth":"./data/eth.train"
+        }
+        '''
         dataset_names = paths.keys()
         self.img_files = OrderedDict()
         self.label_files = OrderedDict()
@@ -349,10 +379,10 @@ class JointDataset(LoadImagesAndLabels):  # for training
         for ds, path in paths.items():
             with open(path, 'r') as file:
                 self.img_files[ds] = file.readlines()
-                self.img_files[ds] = [osp.join(root, x.strip()) for x in self.img_files[ds]]
+                self.img_files[ds] = [osp.join(root, x.strip()) for x in self.img_files[ds]]  # strip删除制定字符,默认删空格
                 self.img_files[ds] = list(filter(lambda x: len(x) > 0, self.img_files[ds]))
 
-            self.label_files[ds] = [x.replace('images', 'labels_with_ids').replace('.png', '.txt').replace('.jpg', '.txt')
+            self.label_files[ds] = [x.replace('img1', 'labels_with_ids').replace('.png', '.txt').replace('.jpg', '.txt')
                                 for x in self.img_files[ds]]
 
         for ds, label_paths in self.label_files.items():
@@ -364,9 +394,9 @@ class JointDataset(LoadImagesAndLabels):  # for training
                 if len(lb.shape) < 2:
                     img_max = lb[1]
                 else:
-                    img_max = np.max(lb[:,1])
+                    img_max = np.max(lb[:,1])  # 所有列的前两个最大值,
                 if img_max >max_index:
-                    max_index = img_max 
+                    max_index = img_max  # 要找每个数据集最大的id_nums
             self.tid_num[ds] = max_index + 1
         
         last_index = 0
@@ -374,7 +404,7 @@ class JointDataset(LoadImagesAndLabels):  # for training
             self.tid_start_index[k] = last_index
             last_index += v
         
-        self.nID = int(last_index+1)
+        self.nID = int(last_index+1)  # 几个数据集的id和
         self.nds = [len(x) for x in self.img_files.values()]
         self.cds = [sum(self.nds[:i]) for i in range(len(self.nds))]
         self.nF = sum(self.nds)

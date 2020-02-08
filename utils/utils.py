@@ -1,16 +1,13 @@
 import glob
 import random
-import time
 import os
 import os.path as osp
-
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torchvision.ops import nms
-#import maskrcnn_benchmark.layers.nms as nms
 
 def mkdir_if_missing(d):
     if not osp.exists(d):
@@ -25,8 +22,7 @@ def init_seeds(seed=0):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    #torch.manual_seed_all(seed)
 
 
 def load_classes(path):
@@ -93,6 +89,13 @@ def xywh2xyxy(x):
 
 
 def scale_coords(img_size, coords, img0_shape):
+    """
+
+    :param img_size:  cfg中固定的图像大小
+    :param coords:  detection时通过nms后的box
+    :param img0_shape:  仅仅通过缩放后的图像尺寸
+    :return:
+    """
     # Rescale x1, y1, x2, y2 from 416 to image size
     gain_w = float(img_size[0]) / img0_shape[1]  # gain  = old / new
     gain_h = float(img_size[1]) / img0_shape[0]
@@ -189,9 +192,14 @@ def compute_ap(recall, precision):
 
 
 def bbox_iou(box1, box2, x1y1x2y2=False):
+    """Returns the IoU of two bounding boxes
+    box1 是一个meshgrid和预设anchor，所有这个函数就是计算每个预设的anchor在gt_boxes上的iou
+    :param box1: （nA x nGh x nGw） x 4,其中最后一个纬度的前两个是（2, nGh, nGw）的meshgrid重复的，后两个是由（nA x 2）预设anchor重复生成的
+    :param box2: gt_boxes
+    :param x1y1x2y2:是坐标的排序方式，如果False则为cx,cy,w,h，
+    :return:  (nA x nGh x nGw) x M    (M是gt_boxes的数量)
     """
-    Returns the IoU of two bounding boxes
-    """
+
     N, M = len(box1), len(box2)
     if x1y1x2y2:
         # Get the coordinates of bounding boxes
@@ -205,14 +213,23 @@ def bbox_iou(box1, box2, x1y1x2y2=False):
         b2_y1, b2_y2 = box2[:, 1] - box2[:, 3] / 2, box2[:, 1] + box2[:, 3] / 2
 
     # get the coordinates of the intersection rectangle
-    inter_rect_x1 = torch.max(b1_x1.unsqueeze(1), b2_x1)
+
+    inter_rect_x1 = torch.max(b1_x1.unsqueeze(1), b2_x1)  # shape (m, n)
+
+    '''
+    torch.max(b1_x1.unsqueeze(1), b2_x1)
+    在numpy下类似于
+    max(b1_x1.repeat(m),dim=1),b1_x1.repeat(n,dim=0))
+    即将b1_x1作为一列重复n列，将b2_x1作为一行重复m行，
+    两个重复的结果都是(m,n)维度的，然后进行求max
+    '''
     inter_rect_y1 = torch.max(b1_y1.unsqueeze(1), b2_y1)
     inter_rect_x2 = torch.min(b1_x2.unsqueeze(1), b2_x2)
     inter_rect_y2 = torch.min(b1_y2.unsqueeze(1), b2_y2)
     # Intersection area
     inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, 0) * torch.clamp(inter_rect_y2 - inter_rect_y1, 0)
     # Union Area
-    b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1))
+    #b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1))
     b1_area = ((b1_x2 - b1_x1) * (b1_y2 - b1_y1)).view(-1,1).expand(N,M)
     b2_area = ((b2_x2 - b2_x1) * (b2_y2 - b2_y1)).view(1,-1).expand(N,M)
 
@@ -220,19 +237,19 @@ def bbox_iou(box1, box2, x1y1x2y2=False):
 
 
 def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw):
-    """
+    """test_emb用
     returns nT, nCorrect, tx, ty, tw, th, tconf, tcls
     """
     nB = len(target)  # number of images in batch
 
-    txy = torch.zeros(nB, nA, nGh, nGw, 2).cuda()  # batch size, anchors, grid size
-    twh = torch.zeros(nB, nA, nGh, nGw, 2).cuda()
-    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0).cuda()
-    tcls = torch.ByteTensor(nB, nA, nGh, nGw, nC).fill_(0).cuda()  # nC = number of classes
-    tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1).cuda() 
+    txy = torch.zeros(nB, nA, nGh, nGw, 2)  # batch size, anchors, grid size
+    twh = torch.zeros(nB, nA, nGh, nGw, 2)
+    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0)
+    tcls = torch.ByteTensor(nB, nA, nGh, nGw, nC).fill_(0)  # nC = number of classes
+    tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1)
     for b in range(nB):
         t = target[b]
-        t_id = t[:, 1].clone().long().cuda()
+        t_id = t[:, 1].clone().long()
         t = t[:,[0,2,3,4,5]]
         nTb = len(t)  # number of targets
         if nTb == 0:
@@ -305,38 +322,54 @@ def build_targets_max(target, anchor_wh, nA, nC, nGh, nGw):
 
 
 def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw):
+    """训练用
+    :param target: [class] [identity] [x_center] [y_center] [width] [height]
+    :param anchor_wh:  [1, self.nA, 1, 1, 2] 是cfg中预设的，仅仅进行了缩放，（该anchor与当前yolo输入的尺寸大小比例与原始anchor大小在原图中的比例一致
+    :param nA: 4
+    :param nC: 1
+    :param nGh: yolo输入层的大小
+    :param nGw:
+    :return:
+    tconf, 预设anchor对应gt的标签，如： 0， 1 ， -1
+    tbox, 预设anchor的前景box对应gt_box的偏差
+    tid 预设anchor对应gt的id
+    """
     ID_THRESH = 0.5
-    FG_THRESH = 0.5
-    BG_THRESH = 0.4
+    FG_THRESH = 0.5  # 这是什么标志,应该是前景吧
+    BG_THRESH = 0.4  # 背景
     nB = len(target)  # number of images in batch
-    assert(len(anchor_wh)==nA)
 
-    tbox = torch.zeros(nB, nA, nGh, nGw, 4).cuda()  # batch size, anchors, grid size
-    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0).cuda()
-    tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1).cuda() 
+    assert(len(anchor_wh)==nA)
+    tbox = torch.zeros(nB, nA, nGh, nGw, 4)  # batch size, anchors, grid size
+    tconf = torch.LongTensor(nB, nA, nGh, nGw).fill_(0)
+    tid = torch.LongTensor(nB, nA, nGh, nGw,1).fill_(-1)
     for b in range(nB):
         t = target[b]
-        t_id = t[:, 1].clone().long().cuda()
+        t_id = t[:, 1].clone().long()
         t = t[:,[0,2,3,4,5]]
         nTb = len(t)  # number of targets
         if nTb == 0:
             continue
 
-        gxy, gwh = t[: , 1:3].clone() , t[:, 3:5].clone()
+        gxy, gwh = t[:, 1:3].clone(), t[:, 3:5].clone()
         gxy[:, 0] = gxy[:, 0] * nGw
         gxy[:, 1] = gxy[:, 1] * nGh
         gwh[:, 0] = gwh[:, 0] * nGw
         gwh[:, 1] = gwh[:, 1] * nGh
-        gxy[:, 0] = torch.clamp(gxy[:, 0], min=0, max=nGw -1)
-        gxy[:, 1] = torch.clamp(gxy[:, 1], min=0, max=nGh -1)
+        gxy[:, 0] = torch.clamp(gxy[:, 0], min=0, max=nGw - 1)
+        gxy[:, 1] = torch.clamp(gxy[:, 1], min=0, max=nGh - 1)
 
-        gt_boxes = torch.cat([gxy, gwh], dim=1)                                            # Shape Ngx4 (xc, yc, w, h)
-        
-        anchor_mesh = generate_anchor(nGh, nGw, anchor_wh)
-        anchor_list = anchor_mesh.permute(0,2,3,1).contiguous().view(-1, 4)              # Shpae (nA x nGh x nGw) x 4
-        #print(anchor_list.shape, gt_boxes.shape)
-        iou_pdist = bbox_iou(anchor_list, gt_boxes)                                      # Shape (nA x nGh x nGw) x Ng
+        gt_boxes = torch.cat([gxy, gwh], dim=1)
+        '''
+        gxy = [x,2], gwh = [x,2], gt_boxes = [x,4], x为当前图片的label的id数
+        4: (xc, yc, w, h)
+        '''
+
+        anchor_mesh = generate_anchor(nGh, nGw, anchor_wh)  # 这个应该看看，体现算法思想  shape (nA x nGh x nGw） x 4 是预设的anchor
+        anchor_list = anchor_mesh.permute(0, 2, 3, 1).contiguous().view(-1, 4)
+        iou_pdist = bbox_iou(anchor_list, gt_boxes)                                      # Shape (nA x nGh x nGw) x M (M是gt_boxes的数量）
         iou_max, max_gt_index = torch.max(iou_pdist, dim=1)                              # Shape (nA x nGh x nGw), both
+        #  找出每个预设anchor所匹配得最大iou的gt_box的值和索引
 
         iou_map = iou_max.view(nA, nGh, nGw)       
         gt_index_map = max_gt_index.view(nA, nGh, nGw)
@@ -347,33 +380,58 @@ def build_targets_thres(target, anchor_wh, nA, nC, nGh, nGw):
         fg_index = iou_map > FG_THRESH                                                    
         bg_index = iou_map < BG_THRESH 
         ign_index = (iou_map < FG_THRESH) * (iou_map > BG_THRESH)
-        tconf[b][fg_index] = 1
-        tconf[b][bg_index] = 0
-        tconf[b][ign_index] = -1
+        tconf[b][fg_index] = 1  # 前景
+        tconf[b][bg_index] = 0  # 背景
+        tconf[b][ign_index] = -1  # 忽视
 
         gt_index = gt_index_map[fg_index]
         gt_box_list = gt_boxes[gt_index]
         gt_id_list = t_id[gt_index_map[id_index]]
+        TrueSum = len(gt_index_map[fg_index])  # TrueSum并没有实际意义只是方便下面注释
+
+        '''
+        gt_index_map和id_index的shape相同，id_index是布尔值，选择gt_index_map对应布尔值为1的值作为一个list，该list的值即gt_index_map是iou_max的索引
+        通过该索引可以找到gt_id_list
+        eg: 
+        id_index.shape==（4,10,18）
+        gt_index_map[id_index].shape==（TrueSum）
+        t_id.shape==（28） 
+        gt_id_list = t_id[gt_index_map[id_index]]==（TrueSum）
+        说明： 在该图像中有28个box_id即t_id，有（4,10,18）个预设anchor，只有70个满足条件了即gt_index_map[id_index].shape=70，而这70个是gt_index_map的值，故可以通过这TrueSum个gt_index_map
+        来得到70个gt_id_list
+        即 gt_box_list，gt_id_list 表示满足条件的gt_box及其对应的id和box
+        '''
+
         #print(gt_index.shape, gt_index_map[id_index].shape, gt_boxes.shape)
         if torch.sum(fg_index) > 0:
-            tid[b][id_index] =  gt_id_list.unsqueeze(1)
+            # tid = torch.LongTensor(nB, nA, nGh, nGw, 1).fill_(-1)
+            tid[b][id_index] = gt_id_list.unsqueeze(1)  # tid对应的是(nB, nA, nGh, nGw）个预设anchor所对应的最匹配的前景gt_id
             fg_anchor_list = anchor_list.view(nA, nGh, nGw, 4)[fg_index] 
-            delta_target = encode_delta(gt_box_list, fg_anchor_list)
+            delta_target = encode_delta(gt_box_list, fg_anchor_list)  # gt_box_list 和 fg_anchor_list 的shape一致(TrueSum, 4)
+
             tbox[b][fg_index] = delta_target
     return tconf, tbox, tid
 
 def generate_anchor(nGh, nGw, anchor_wh):
     nA = len(anchor_wh)
     yy, xx =torch.meshgrid(torch.arange(nGh), torch.arange(nGw))
-    xx, yy = xx.cuda(), yy.cuda()
+    #xx, yy = xx.cuda(), yy.cuda()
 
     mesh = torch.stack([xx, yy], dim=0)                                              # Shape 2, nGh, nGw
     mesh = mesh.unsqueeze(0).repeat(nA,1,1,1).float()                                # Shape nA x 2 x nGh x nGw
     anchor_offset_mesh = anchor_wh.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, nGh,nGw) # Shape nA x 2 x nGh x nGw
     anchor_mesh = torch.cat([mesh, anchor_offset_mesh], dim=1)                       # Shape nA x 4 x nGh x nGw
+    # mesh主要形成anchor的cx和cy，anchor_offset_mesh形成anchor的w和h，可以看这个函数的下面两个语句
+    # anchor_list = anchor_mesh.permute(0, 2, 3, 1).contiguous().view(-1, 4)           # Shpae (nA x nGh x nGw) x 4
+    # 可以理解到anchor_list的物理意义，即在nGh x nGw大小的像素点中，每个像素点有nA个预设size的anchor，每个anchor有四个左边，故shape为(nA x nGh x nGw x） 4
     return anchor_mesh
 
 def encode_delta(gt_box_list, fg_anchor_list):
+    """gt_box和anchor的偏差
+    :param gt_box_list: 满足前景阈值的预设anchor对应的gt_box
+    :param fg_anchor_list: 满足前景阈值的预设anchor
+    :return:
+    """
     px, py, pw, ph = fg_anchor_list[:, 0], fg_anchor_list[:,1], \
                      fg_anchor_list[:, 2], fg_anchor_list[:,3]
     gx, gy, gw, gh = gt_box_list[:, 0], gt_box_list[:, 1], \
@@ -427,7 +485,7 @@ def non_max_suppression(prediction, conf_thres=0.5, nms_thres=0.4, method='stand
         method = 'standard' or 'fast'
     """
 
-    output = [None for _ in range(len(prediction))]
+    output = [None for _ in range(len(prediction))]  # nB 个None的list
     for image_i, pred in enumerate(prediction):
         # Filter out confidence scores below threshold
         # Get score and class with highest confidence
@@ -462,7 +520,8 @@ def non_max_suppression(prediction, conf_thres=0.5, nms_thres=0.4, method='stand
 
     return output
 
-def fast_nms(boxes, scores, iou_thres:float=0.5, top_k:int=200, second_threshold:bool=False, conf_thres:float=0.5):
+def fast_nms(boxes, scores, iou_thres:float=0.5, top_k:int=200, second_threshold:bool=False, conf_thres:float=0.5,
+             self=None):
     '''
     Vectorized, approximated, fast NMS, adopted from YOLACT:
     https://github.com/dbolya/yolact/blob/master/layers/functions/detection.py

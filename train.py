@@ -1,21 +1,20 @@
 import argparse
 import json
+import test
 import time
-
-import test  
 from models import *
 from utils.datasets import JointDataset, collate_fn
 from utils.utils import *
 from utils.log import logger
 from torchvision.transforms import transforms as T
-
+from collections import defaultdict
 
 def train(
         cfg,
         data_cfg,
         resume=False,
         epochs=100,
-        batch_size=16,
+        batch_size=4,
         accumulated_batches=1,
         freeze_backbone=False,
         opt=None,
@@ -44,8 +43,6 @@ def train(
     # Initialize model
     model = Darknet(cfg_dict, dataset.nID)
 
-    
-
     cutoff = -1  # backbone reaches to cutoff layer
     start_epoch = 0
     if resume:
@@ -68,17 +65,18 @@ def train(
         # Initialize model with backbone (optional)
         if cfg.endswith('yolov3.cfg'):
             load_darknet_weights(model, osp.join(weights ,'darknet53.conv.74'))
-            cutoff = 75
+            cutoff = 75  # cutoff 在一定层之前冻结
         elif cfg.endswith('yolov3-tiny.cfg'):
             load_darknet_weights(model, osp.join(weights , 'yolov3-tiny.conv.15'))
             cutoff = 15
 
-        model.cuda().train()
+        #model.cuda().train()
+        model.to("cpu").train()
 
         # Set optimizer
         optimizer = torch.optim.SGD(filter(lambda x: x.requires_grad, model.parameters()), lr=opt.lr, momentum=.9, weight_decay=1e-4)
 
-    model = torch.nn.DataParallel(model)
+    #model = torch.nn.DataParallel(model)
     # Set scheduler
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, 
             milestones=[int(0.5*opt.epochs), int(0.75*opt.epochs)], gamma=0.1)
@@ -118,7 +116,9 @@ def train(
                     g['lr'] = lr
             
             # Compute loss, compute gradient, update parameters
-            loss, components = model(imgs.cuda(), targets.cuda(), targets_len.cuda())
+            #loss, components = model(imgs.cuda(), targets.cuda(), targets_len.cuda())
+            loss, components = model(imgs, targets, targets_len)
+
             components = torch.mean(components.view(-1, 5),dim=0)
 
             loss = torch.mean(loss)
@@ -132,7 +132,7 @@ def train(
             # Running epoch-means of tracked metrics
             ui += 1
             
-            for ii, key in enumerate(model.module.loss_names):
+            for ii, key in enumerate(model.loss_names):
                 rloss[key] = (rloss[key] * ui + components[ii]) / (ui + 1)
 
             s = ('%8s%12s' + '%10.3g' * 6) % (
@@ -146,10 +146,12 @@ def train(
                 logger.info(s)
         
         # Save latest checkpoint
+        '''
         checkpoint = {'epoch': epoch,
                       'model': model.module.state_dict(),
                       'optimizer': optimizer.state_dict()}
         torch.save(checkpoint, latest)
+        '''
 
 
         # Calculate mAP
@@ -167,7 +169,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=30, help='number of epochs')
     parser.add_argument('--batch-size', type=int, default=32, help='size of each image batch')
     parser.add_argument('--accumulated-batches', type=int, default=1, help='number of batches before optimizer step')
-    parser.add_argument('--cfg', type=str, default='cfg/yolov3_1088x608.cfg', help='cfg file path')
+    parser.add_argument('--cfg', type=str, default='cfg/yolov3_576x320.cfg', help='cfg file path')
     parser.add_argument('--data-cfg', type=str, default='cfg/ccmcpe.json', help='coco.data file path')
     parser.add_argument('--resume', action='store_true', help='resume training flag')
     parser.add_argument('--print-interval', type=int, default=40, help='print interval')

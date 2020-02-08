@@ -1,13 +1,8 @@
 {
-    "root":"/home/wangzd/datasets/MOT",
+    "root":"/home/feng/Github/PycharmProjects/Towards-Realtime-MOT",
     "train":
     {
-        "mot17":"./data/mot17.train",
-        "caltech":"./data/caltech.train",
-        "citypersons":"./data/citypersons.train",
-        "cuhksysu":"./data/cuhksysu.train",
-        "prw":"./data/prw.train",
-        "eth":"./data/eth.train"
+        "mot16":"./data/mot16.train"
     },
     "test_emb":
     {

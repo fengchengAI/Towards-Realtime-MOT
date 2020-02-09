@@ -6,6 +6,8 @@ import scipy.linalg
 Table for the 0.95 quantile of the chi-square distribution with N degrees of
 freedom (contains values for N=1, ..., 9). Taken from MATLAB/Octave's chi2inv
 function and used as Mahalanobis gating threshold.
+KalmanFilter中最重要的就是两个变量
+mean为状态信息， covariance 为误差项
 """
 chi2inv95 = {
     1: 3.8415,
@@ -40,7 +42,7 @@ class KalmanFilter(object):
         ndim, dt = 4, 1.
 
         # Create Kalman filter model matrices.
-        self._motion_mat = np.eye(2 * ndim, 2 * ndim)
+        self._motion_mat = np.eye(2 * ndim, 2 * ndim)  # 矩阵A
         for i in range(ndim):
             self._motion_mat[i, ndim + i] = dt
         self._update_mat = np.eye(ndim, 2 * ndim)
@@ -113,7 +115,7 @@ class KalmanFilter(object):
             self._std_weight_velocity * mean[3],
             1e-5,
             self._std_weight_velocity * mean[3]]
-        motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
+        motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))  # 矩阵Q
 
         mean = np.dot(mean, self._motion_mat.T)
         covariance = np.linalg.multi_dot((
@@ -218,7 +220,7 @@ class KalmanFilter(object):
             projected_cov, lower=True, check_finite=False)
         kalman_gain = scipy.linalg.cho_solve(
             (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
-            check_finite=False).T
+            check_finite=False).T  # kalman增益
         innovation = measurement - projected_mean
 
         new_mean = mean + np.dot(innovation, kalman_gain.T)

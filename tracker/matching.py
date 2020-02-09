@@ -22,7 +22,7 @@ def merge_matches(m1, m2, shape):
     return match, unmatched_O, unmatched_Q
 
 
-def linear_assignment(cost_matrix, thresh):
+def linear_assignment(cost_matrix, thresh):  # 匈牙利算法
     if cost_matrix.size == 0:
         return np.empty((0, 2), dtype=int), tuple(range(cost_matrix.shape[0])), tuple(range(cost_matrix.shape[1]))
     matches, unmatched_a, unmatched_b = [], [], []
@@ -89,7 +89,7 @@ def embedding_distance(tracks, detections, metric='cosine'):
         return cost_matrix
     det_features = np.asarray([track.curr_feat for track in detections], dtype=np.float)
     track_features = np.asarray([track.smooth_feat for track in tracks], dtype=np.float)
-    cost_matrix = np.maximum(0.0, cdist(track_features, det_features)) # Nomalized features
+    cost_matrix = np.maximum(0.0, cdist(track_features, det_features))  # Nomalized features
 
     return cost_matrix
 
@@ -104,5 +104,5 @@ def fuse_motion(kf, cost_matrix, tracks, detections, only_position=False, lambda
         gating_distance = kf.gating_distance(
             track.mean, track.covariance, measurements, only_position, metric='maha')
         cost_matrix[row, gating_distance > gating_threshold] = np.inf
-        cost_matrix[row] = lambda_ * cost_matrix[row] + (1-lambda_)* gating_distance
+        cost_matrix[row] = lambda_ * cost_matrix[row] + (1-lambda_) * gating_distance
     return cost_matrix

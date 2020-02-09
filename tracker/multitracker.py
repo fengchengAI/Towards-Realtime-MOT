@@ -15,7 +15,7 @@ class STrack(BaseTrack):
         self._tlwh = np.asarray(tlwh, dtype=np.float)
         self.kalman_filter = None
         self.mean, self.covariance = None, None
-        self.is_activated = False
+        self.is_activated = False  # 状态
 
         self.score = score
         self.tracklet_len = 0
@@ -75,7 +75,7 @@ class STrack(BaseTrack):
         self.update_features(new_track.curr_feat)
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        self.is_activated = True
+        self.is_activated = True  # 为什么activate函数没有激活这个，应该是因为作者想要连续两帧出现才算激活的
         self.frame_id = frame_id
         if new_id:
             self.track_id = self.next_id()
@@ -170,13 +170,16 @@ class JDETracker(object):
         self.max_time_lost = self.buffer_size
 
         self.kalman_filter = KalmanFilter()
+        self.c  = 0
 
     def update(self, im_blob, img0):
+
         """
         :param im_blob: 经过处理的照片
         :param img0: 仅仅经过缩放的图片
         :return:
         """
+
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -209,6 +212,8 @@ class JDETracker(object):
         unconfirmed = []
         tracked_stracks = []  # type: list[STrack]
         for track in self.tracked_stracks:
+        # 刚新加的STrack的is_activated属性为False,所以这个是针对上一帧加入的STrack，
+        # 即新加的为unconfirmed，实际意义为作者认为连续出现两帧的id才会被认为有效
             if not track.is_activated:
                 unconfirmed.append(track)
             else:
@@ -216,17 +221,23 @@ class JDETracker(object):
 
         ''' Step 2: First association, with embedding'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
-        # Predict the current location with KF
+        # Predict the current location with KF 卡尔曼滤波器
         STrack.multi_predict(strack_pool)
-        dists = matching.embedding_distance(strack_pool, detections)
-        dists = matching.fuse_motion(self.kalman_filter, dists, strack_pool, detections)
+        dists = matching.embedding_distance(strack_pool, detections)  # 基于外观信息，计算tracks和detections的余弦距离代价矩阵
+        dists = matching.fuse_motion(self.kalman_filter, dists, strack_pool, detections)  # 基于马氏距离，过滤掉代价矩阵中一些不合适的项(将其设置为一个较大的值)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.7)
+        """ matches, u_track, u_detection
+        # match, 没有匹配到detection的track， 没有匹配到track的detection
+        # note! 这里只是编号，strack_pool和detections都有编号的
+        即，可以用strack_pool[u_track],detections[u_detection]访问的
+        """
+
 
         for itracked, idet in matches:
             track = strack_pool[itracked]
             det = detections[idet]
             if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id)
+                track.update(det, self.frame_id)
                 activated_starcks.append(track)
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
@@ -234,7 +245,9 @@ class JDETracker(object):
 
         ''' Step 3: Second association, with IOU'''
         detections = [detections[i] for i in u_detection]
-        r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state==TrackState.Tracked ]
+        r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
+        # 对于那些没有用embedding匹配到detections的，本来状态就为Tracked的需要再匹配一次
+
         dists = matching.iou_distance(r_tracked_stracks, detections)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
         
@@ -248,7 +261,7 @@ class JDETracker(object):
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
 
-        for it in u_track:
+        for it in u_track:  # 对于两中方式都没有匹配到detections的STrack标记为Lost，
             track = r_tracked_stracks[it]
             if not track.state == TrackState.Lost:
                 track.mark_lost()
@@ -256,18 +269,18 @@ class JDETracker(object):
 
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
         detections = [detections[i] for i in u_detection]
-        dists = matching.iou_distance(unconfirmed, detections)
+        dists = matching.iou_distance(unconfirmed, detections)  # 用两种都没有匹配到STrack的detections，与没有进行验证的STrack匹配
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
             unconfirmed[itracked].update(detections[idet], self.frame_id)
             activated_starcks.append(unconfirmed[itracked])
-        for it in u_unconfirmed:
+        for it in u_unconfirmed:  # 如果在u_unconfirmed中都没有匹配到detections则应该移除，就是说一个id，只出现了一帧
             track = unconfirmed[it]
             track.mark_removed()
             removed_stracks.append(track)
 
         """ Step 4: Init new stracks"""
-        for inew in u_detection:
+        for inew in u_detection:  # 如果在detections中都没有匹配到u_unconfirmed则表示新有的id
             track = detections[inew]
             if track.score < self.det_thresh:
                 continue
@@ -300,6 +313,7 @@ class JDETracker(object):
         return output_stracks
 
 def joint_stracks(tlista, tlistb):
+    """ tlista + tlistb """
     exists = {}
     res = []
     for t in tlista:
@@ -307,7 +321,7 @@ def joint_stracks(tlista, tlistb):
         res.append(t)
     for t in tlistb:
         tid = t.track_id
-        if not exists.get(tid, 0):
+        if not exists.get(tid, 0):  # 排除共同项，因为每个STrack的track_id不同
             exists[tid] = 1
             res.append(t)
     return res

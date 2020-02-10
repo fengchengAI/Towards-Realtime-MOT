@@ -229,7 +229,7 @@ class JDETracker(object):
                 tracked_stracks.append(track)
 
         ''' Step 2: First association, with embedding'''
-        strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)  # 如果
+        strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         # Predict the current location with KF 卡尔曼滤波器
         STrack.multi_predict(strack_pool)
         dists = matching.embedding_distance(strack_pool, detections)  # 基于外观信息，计算tracks和detections的余弦距离代价矩阵
